@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/bronze/*.jsonl
+data/silver/*.parquet
+.DS_Store
