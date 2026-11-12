@@ -1,57 +1,32 @@
-# Basel III Liquidity Reporting Pipeline (LCR / NSFR)
+# Basel III Liquidity Reporting Pipeline (LCR and NSFR)
 
 [![pipeline](https://github.com/vabhishek8/basel-liquidity-reporting-pipeline/actions/workflows/pipeline.yml/badge.svg)](https://github.com/vabhishek8/basel-liquidity-reporting-pipeline/actions/workflows/pipeline.yml)
 
-A regulatory liquidity reporting pipeline that computes the Liquidity
-Coverage Ratio (LCR) and Net Stable Funding Ratio (NSFR) for a synthetic
-Australian bank's daily balance sheet, structurally consistent with APRA
-Prudential Standard APS 210 and the underlying BCBS238 (LCR) and BCBS295
-(NSFR) standards.
+Computes the Liquidity Coverage Ratio (LCR) and Net Stable Funding Ratio (NSFR) for a synthetic Australian bank's daily balance sheet. The structure follows APRA Prudential Standard APS 210 and the Basel standards behind it, BCBS238 for LCR and BCBS295 for NSFR.
 
 **[Live dashboard →](https://vabhishek8.github.io/basel-liquidity-reporting-pipeline/)**
 
-Built as the third project in a series that deliberately covers three
-different data-engineering postures for banking: [azure-medallion-weather-pipeline](https://github.com/vabhishek8/azure-medallion-weather-pipeline)
-(cost-optimized serverless), [aml-transaction-monitoring-pipeline](https://github.com/vabhishek8/aml-transaction-monitoring-pipeline)
-(private-endpoint compliance detection), and this one: a deterministic
-regulatory calculation with a hard reporting deadline and a
-segregation-of-duties requirement, which is a different job than either
-sibling project and closer to what a data engineer sitting inside a
-bank's regulatory reporting or treasury function actually owns.
+**This is a portfolio project, not a regulatory tool.** The runoff, ASF and RSF factors are illustrative and simplified. A real APRA return carries counterparty, product and behavioural detail that isn't modelled here. No real balance-sheet data is used, and every figure is synthetic.
 
-**This is a portfolio project, not a production regulatory tool.** The
-runoff, ASF, and RSF factors below are illustrative and simplified; a
-real APRA return carries counterparty, product, and behavioural nuance
-not modelled here. No real balance-sheet data is used, all figures are
-synthesized.
+It's the third of three pipelines, and each one takes a different stance:
 
----
+- [azure-medallion-weather-pipeline](https://github.com/vabhishek8/azure-medallion-weather-pipeline) is cost-optimised and serverless
+- [aml-transaction-monitoring-pipeline](https://github.com/vabhishek8/aml-transaction-monitoring-pipeline) is private-endpoint compliance detection
+- this one is a deterministic regulatory calculation with a hard deadline and a segregation-of-duties requirement
 
-## Why this project exists
+That last kind is closer to what a data engineer inside a bank's regulatory reporting or treasury team actually owns.
 
-AML detection is a statistical problem: did the model catch the
-pattern? Liquidity reporting is a different problem entirely: did the
-calculation reproduce the exact number a regulator expects, given a
-fixed, publicly-specified formula? Getting a deterministic calculation
-provably right, including the parts of the specification that are easy
-to misread, is a different and equally real skill from building a
-detector, and it is the more common day job: most people working in
-bank regulatory reporting are implementing formulas correctly against a
-deadline, not training models.
+## Why I built it
 
-This project is scoped around that:
+AML detection is a statistical problem: did the rule catch the pattern? Liquidity reporting is a different problem. Did the calculation reproduce the exact number a regulator expects, from a formula that's published in full? Getting a deterministic calculation provably right, including the parts of the spec that are easy to misread, is a different skill from building a detector. It's also the more common day job. Most people in bank regulatory reporting are implementing formulas correctly against a deadline, not training models.
 
-- Can the HQLA capping rules be implemented as specified, not as they
-  first appear from a casual reading? (See "a real bug this caught" below.)
-- Does the pipeline distinguish a 30-day cash-flow shock (LCR) from a
-  1-year structural funding shock (NSFR) correctly, given the same
-  underlying event?
-- Where does a maker-checker control belong in the architecture, not
-  just in a policy document?
+So I scoped it around three questions:
 
----
+- Can the HQLA caps be implemented as specified, not as they first read? (See "What broke", below.)
+- Does the pipeline treat a 30-day cash-flow shock (LCR) and a one-year structural funding shock (NSFR) differently, given the same event?
+- Where does a maker-checker control belong in the architecture, rather than only in a policy document?
 
-## Architecture
+## How it's wired
 
 ```mermaid
 flowchart LR
@@ -85,13 +60,9 @@ flowchart LR
     S --> H & O & N --> R --> DASH
 ```
 
-## Calculation correctness (measured, not asserted)
+## Is the calculation right? (measured)
 
-Every ratio in this project is checked against a hand-calculated
-expected value, not just spot-checked for plausibility. `tests/test_gold.py`
-carries a minimal fixture with round numbers where the expected LCR and
-NSFR are computed by hand in the test's own docstring, and the SQL is
-asserted to match that value exactly.
+Every ratio is checked against a value I calculated by hand, not eyeballed for plausibility. `tests/test_gold.py` has a small fixture with round numbers, the expected LCR and NSFR are worked out in the test's docstring, and the SQL has to match exactly.
 
 | Check | Result |
 |---|---|
@@ -101,45 +72,19 @@ asserted to match that value exactly.
 | Deposit-run scenario breaches LCR while NSFR stays healthy | Pass, by design (see below) |
 | HQLA waterfall matches the correct sequential capping order, not a naive single cap | Pass, regression-guarded |
 
-### A real bug this caught: the HQLA cap is two caps, not one
+## What broke, and how it got caught
 
-BCBS238 par 51 specifies the Level 2 asset cap as two nested rules:
-Level 2B assets cannot exceed 15% of total HQLA, and total Level 2
-(2A + 2B combined) cannot exceed 40% of total HQLA. A first, naive
-implementation applied only the 40% total cap to the sum of Level 2A and
-Level 2B, since that reading is what the summary version of the rule
-sounds like at a glance. On a Level-2B-heavy portfolio (see the
-`l2b_heavy` scenario in `src/generate_balance_sheet.py`), that naive
-version overstates total HQLA by roughly $65 million, about 8%, because
-it never applies the 15% Level 2B sub-cap before applying the 40% total
-cap. The fix was to compute Level 2B's adjusted value first, capped
-against Level 1, then combine with Level 2A and apply the total cap
-second. `src/gold.py` keeps the naive version alongside the correct one,
-not because it is used anywhere, but because
-`tests/test_gold.py::test_hqla_waterfall_not_naive_single_cap` needs
-something concrete to regress against.
+BCBS238 paragraph 51 sets the Level 2 asset cap as two nested rules. Level 2B can't exceed 15% of total HQLA, and Level 2 overall (2A plus 2B) can't exceed 40%. My first version applied only the 40% cap to the sum of 2A and 2B, because that's what the summary of the rule sounds like at a glance. On a portfolio heavy in Level 2B (the `l2b_heavy` scenario in `src/generate_balance_sheet.py`), that overstated total HQLA by about $65 million, roughly 8%, because the 15% sub-cap was never applied.
 
-### LCR and NSFR do not move together, and that is intentional
+The fix caps Level 2B first, against Level 1, then adds Level 2A and applies the overall cap. `src/gold.py` still contains the naive version. Nothing uses it except `tests/test_gold.py::test_hqla_waterfall_not_naive_single_cap`, which needs something concrete to fail against.
 
-The `deposit_run` scenario cuts retail deposits by 20% and funds the
-withdrawal from cash and government securities. LCR (a 30-day
-cash-flow stress measure) drops from a healthy ~195% to below 100%,
-a real breach. NSFR (a 1-year structural funding measure) barely moves,
-because retail deposits still carry a favourable 90-95% Available
-Stable Funding factor regardless of a short-term run assumption; NSFR
-is measuring something structurally different from LCR, not a slower
-version of the same thing. `tests/test_gold.py::test_deposit_run_breaches_lcr_but_not_nsfr`
-asserts both halves of that behaviour, not just the breach.
+### LCR and NSFR don't move together, on purpose
 
----
+The `deposit_run` scenario cuts retail deposits by 20% and funds the withdrawal from cash and government securities. LCR, a 30-day stress measure, drops from a healthy ~195% to below 100%, which is a real breach. NSFR, a one-year structural measure, barely moves, because retail deposits still carry a favourable 90 to 95% Available Stable Funding factor whatever a short-term run assumes. NSFR measures something structurally different from LCR, not a slower version of it. `tests/test_gold.py::test_deposit_run_breaches_lcr_but_not_nsfr` checks both halves of that, not just the breach.
 
-## Production Azure mapping
+## The Azure version, and why it isn't running
 
-`infra/main.bicep` deliberately makes a different set of infrastructure
-calls than either sibling project, because this workload's shape is
-different: a scheduled, predictable-size batch against a hard regulatory
-deadline, with a segregation-of-duties requirement between the process
-that produces a number and the person who approves its submission.
+`infra/main.bicep` makes different infrastructure calls from the other two projects, because this workload has a different shape: a scheduled batch of predictable size, a hard regulatory deadline, and a requirement that the process producing a number is separate from the person approving its submission.
 
 | Decision | Reasoning |
 |---|---|
@@ -149,7 +94,7 @@ that produces a number and the person who approves its submission.
 | Dedicated `audit-log` container, 365-day Log Analytics retention in prod | This is an audit trail for who approved what and when, not operational telemetry. |
 | Private endpoints for storage and the Synapse workspace | Standard hardening; lighter-touch than the AML project's VNet-everywhere posture because this is submission data, not raw PII/transaction data. |
 
-Validated with `bicep build` (0 errors, 0 warnings, 20 resources). Deploy it yourself:
+Validated with `bicep build` (0 errors, 0 warnings, 20 resources). To deploy it yourself:
 
 ```bash
 az deployment group create \
@@ -158,9 +103,7 @@ az deployment group create \
   --parameters envName=dev alertEmail=you@example.com
 ```
 
----
-
-## Running locally
+## Running it locally
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -188,9 +131,8 @@ infra/main.bicep                production Azure IaC: Dedicated SQL Pool, GRS st
 
 ## Stack
 
-Python · pandas · DuckDB · Plotly · pytest · GitHub Actions · Bicep (Synapse Dedicated SQL Pool, ADLS Gen2 GRS, Data Factory, Key Vault RBAC, Log Analytics)
+Python, pandas, DuckDB, Plotly, pytest and GitHub Actions. The Bicep covers a Synapse Dedicated SQL Pool, ADLS Gen2 with GRS, Data Factory, Key Vault RBAC and Log Analytics.
 
 ---
 
-Built by [Abhishek Vadlamudi](https://abhishekvadlamudi.com), Senior BI Engineer
-positioning toward Azure Data Engineering in financial services.
+Built by [Abhishek Vadlamudi](https://abhishekvadlamudi.com), Senior Business Intelligence Engineer at Unisys in Sydney.
