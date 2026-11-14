@@ -22,7 +22,7 @@
 // against that deadline, without serverless's per-query cost and
 // cold-start variance for a job that cannot simply retry after hours.
 
-@description('Deployment environment. Prod gets GRS storage, longer retention, and a live Synapse Dedicated Pool; dev keeps costs near zero.')
+@description('Deployment environment. Prod gets GRS storage and longer log retention. The Synapse Dedicated Pool (DW100c) is deployed in every environment, so pause it when idle.')
 @allowed(['dev', 'prod'])
 param envName string = 'dev'
 
@@ -184,8 +184,9 @@ resource checkerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (
 
 // ---------------------------------------------------------------------------
 // Compute: Synapse workspace with a Dedicated SQL Pool, not Serverless.
-// Deliberately paused outside the nightly batch window (resumed by the
-// ADF pipeline's first activity, paused by its last) so it is not billed
+// Intended to be paused outside the nightly batch window (resume as the
+// ADF pipeline's first activity, pause as its last; those pipeline
+// activities are not defined in this template) so it is not billed
 // 24/7, the same cost discipline as the sibling projects, applied
 // differently because this workload's demand curve is different: fixed
 // schedule, predictable size, hard deadline, rather than the sporadic
@@ -214,7 +215,7 @@ resource dedicatedPool 'Microsoft.Synapse/workspaces/sqlPools@2021-06-01' = {
   name: 'reportingpool'
   location: location
   tags: tags
-  sku: { name: 'DW100c' } // smallest reserved tier; paused outside the batch window
+  sku: { name: 'DW100c' } // smallest reserved tier; intended to be paused outside the batch window
   properties: {
     createMode: 'Default'
     collation: 'SQL_Latin1_General_CP1_CI_AS'
